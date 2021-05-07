@@ -1,0 +1,266 @@
+# init:
+#   - ps: iex ((new-object net.webclient).DownloadString('https://raw.githubusercontent.com/appveyor/ci/master/scripts/enable-rdp.ps1'))
+
+image:
+- Visual Studio 2017
+- Ubuntu1804
+- macos
+
+
+configuration: Release
+
+platform:
+- x64
+
+cache:
+#- externals/OpenSceneGraph
+#- resources/models
+    
+skip_commits:
+  message: /#skip_build/
+
+before_build:
+  - cmd: gitversion /l console /output buildserver
+
+  - ps: |
+        git submodule update --init --quiet
+        echo "const char* ESMINI_BUILD_VERSION=`"$env:APPVEYOR_BUILD_VERSION`";"  | Out-File -Encoding ascii EnvironmentSimulator/Modules/CommonMini/buildnr.cpp
+        type EnvironmentSimulator/Modules/CommonMini/buildnr.cpp
+
+# publish package on tag build
+deploy:
+  - provider: GitHub
+    tag: $(APPVEYOR_REPO_TAG_NAME)
+    release: esmini $(GitVersion_MajorMinorPatch) (build $(APPVEYOR_BUILD_NUMBER))
+    description: 'Demo and binaries. For information about changes and new features see [release notes](https://github.com/esmini/esmini/blob/master/release_notes.md).'
+    auth_token:
+      secure: 'Zsjm85fzs4eTdDJg1VB+Y8Lk+5bEJRBkeaEtYtnbtv2IUg1sanoQTub/55QYNBsY'
+    on:
+       APPVEYOR_REPO_TAG: true       # deploy on tag push only
+    
+for:
+  -
+    matrix:
+      only:
+        - image: Ubuntu1804
+    init:
+      - echo Ubuntu build script
+      - sh: >-
+          sudo apt-get update
+
+          sudo apt-get install -y libgl1-mesa-dev libxrandr-dev libxinerama-dev
+          
+    build_script:
+      - sh: >-
+          ./create_ubuntu_gcc_project.sh
+          
+          cd build
+          
+          make -j4 install
+          
+          cd ../build-debug
+          
+          make -j4
+          
+    after_build:
+      - sh: >-
+          cd ..
+          
+          if [[ $APPVEYOR_REPO_COMMIT_MESSAGE = *#skip_bins* ]]; 
+          then 
+            echo "Skip binary artifacts";
+          else
+            zip -r esmini-bin_ubuntu.zip bin EnvironmentSimulator/Applications/odrplot/xodr.py EnvironmentSimulator/Libraries/esminiRMLib/esminiRMLib.hpp EnvironmentSimulator/Libraries/esminiLib/esminiLib.hpp version.txt
+          fi
+          
+          chmod -R +x ./run/*
+          chmod -R +x ./scripts/*
+
+          ./generate_binary_dist.sh
+
+          if [ "$APPVEYOR_REPO_TAG" == "true" ]; 
+          then     
+              mv esmini-demo.zip esmini-demo_ubuntu.zip;
+          else
+              rm esmini-demo.zip;
+          fi
+
+    test_script:
+      - ps: |
+            cd build/EnvironmentSimulator/Unittest
+            $env:path += "../../../bin"
+            
+            ./OperatingSystem_test
+            if ($lastExitCode -ne 0) {
+                throw "OperatingSystem_test failed"
+            }
+            
+            ./RoadManager_test
+            if ($lastExitCode -ne 0) {
+                throw "RoadManager_test failed"
+            }
+            
+            ./ScenarioEngine_test
+            if ($lastExitCode -ne 0) {
+                throw "ScenarioEngine_test failed"
+            }      
+            
+            ./ScenarioEngineDll_test
+            if ($lastExitCode -ne 0) {
+                throw "ScenarioEngineDll_test failed"
+            }      
+
+            cd ../../../test
+            python3 smoke_test.py
+            python3 alks_suite.py
+
+    artifacts:
+      - path: esmini-*_ubuntu.zip
+        name: ubuntu_artifacts
+
+  -
+    matrix:
+      only:
+        - image: macos
+
+    build_script:
+      - echo MacOS Catalina build script
+      - sh: >-
+          chmod +x create_xcode_project.sh
+          
+          ./create_xcode_project.sh
+          
+          cd build
+          
+          xcodebuild -scheme install -configuration Release build
+
+    after_build:
+      - sh: >-
+          lipo -create EnvironmentSimulator/Libraries/esminiRMLib/Release/libesminiRMLib.dylib -output ../bin/esminiRMLib.bundle
+          
+          lipo -create EnvironmentSimulator/Libraries/esminiLib/Release/libesminiLib.dylib -output ../bin/esminiLib.bundle
+
+          cd ..
+          
+          if [[ $APPVEYOR_REPO_COMMIT_MESSAGE = *#skip_bins* ]]; 
+          then 
+            echo "Skip binary artifacts";
+          else
+            zip -r esmini-bin_mac_catalina.zip bin EnvironmentSimulator/Applications/odrplot/xodr.py EnvironmentSimulator/Libraries/esminiRMLib/esminiRMLib.hpp EnvironmentSimulator/Libraries/esminiLib/esminiLib.hpp version.txt
+          fi
+          
+          chmod -R +x ./run/*
+          chmod -R +x ./scripts/*
+
+          ./generate_binary_dist.sh
+          
+          if [ "$APPVEYOR_REPO_TAG" == "true" ]; 
+          then     
+              mv esmini-demo.zip esmini-demo_mac_catalina.zip;
+          else
+              rm esmini-demo.zip;
+          fi
+
+    test_script:
+      - ps: |
+            cd test
+            python3 smoke_test.py
+            python3 alks_suite.py
+
+    artifacts:
+      - path: esmini-*_mac_catalina.zip
+        name: mac_catalina_artifacts
+
+  -
+    matrix:
+      only:
+        - image: Visual Studio 2017
+          platform: x64
+    build_script:
+      - echo Visual Studio 2017 x64 build script
+      - cmd:
+          mkdir build
+          
+          cd build
+          
+          cmake.exe -G "Visual Studio 15 Win64" -D USE_OSG=True ..
+          
+      - cmd: 
+
+          msbuild /m /property:Configuration=Release EnvironmentSimulator.sln
+
+          cd..
+
+          generate_binary_dist.bat
+
+    after_build:
+      - ps: |
+          if ($Env:APPVEYOR_REPO_COMMIT_MESSAGE -match '#skip_bins')
+          {
+            echo "Skip binary artifacts"
+          }
+          else
+          {
+            7z a esmini-bin_win_x64.zip bin/* EnvironmentSimulator/Applications/odrplot/xodr.py EnvironmentSimulator/Libraries/esminiRMLib/esminiRMLib.hpp EnvironmentSimulator/Libraries/esminiLib/esminiLib.hpp version.txt
+          }
+          
+          if ($Env:APPVEYOR_REPO_TAG -eq $true)
+          {
+            7z a esmini-demo_win.zip esmini-demo/*
+          }
+          else
+          {
+            echo "Skip demos"
+          }
+
+
+    test_script:
+      - ps: |
+            cd build/EnvironmentSimulator/Unittest
+            $env:path += ";../../../bin"
+            
+            ./Release/OperatingSystem_test
+            if ($lastExitCode -ne 0) {
+                throw "OperatingSystem_test failed"
+            }
+            
+            ./Release/RoadManager_test
+            if ($lastExitCode -ne 0) {
+                throw "RoadManager_test failed"
+            }
+            
+            ./Release/ScenarioEngine_test
+            if ($lastExitCode -ne 0) {
+                throw "ScenarioEngine_test failed"
+            }
+            
+            ./Release/ScenarioEngineDll_test
+            if ($lastExitCode -ne 0) {
+                throw "ScenarioEngineDll_test failed"
+            }
+
+      - cmd:
+            cd ../../../test
+            
+            C:/Python38/python smoke_test.py
+
+            C:/Python38/python alks_suite.py
+
+    artifacts:
+      - path: esmini-*_win*.zip
+        name: windows_artifacts
+
+  -
+    matrix:
+      exclude:
+        - image: Ubuntu1804
+          platform: x86
+        - image: macos-mojave
+          platform: x86
+        - image: macos
+          platform: x86
+        - image: Visual Studio 2015
+          platform: x86
+
+# on_finish:
+#   - ps: $blockRdp = $true; iex ((new-object net.webclient).DownloadString('https://raw.githubusercontent.com/appveyor/ci/master/scripts/enable-rdp.ps1'))

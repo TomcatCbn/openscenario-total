@@ -1,0 +1,40 @@
+version: '3.7'
+
+services:
+  scenariogenerator:
+    build: ./ScenarioGenerator
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - ./ScenarioGenerator/:/usr/src/app/
+      - temp_scenario:/usr/src/temp/
+    ports:
+      - 8000:8000
+    env_file:
+      - ./.env.dev
+    depends_on:
+      - scenariodb
+      - scenarioplayer
+
+  scenariodb:
+    image: postgres:12.0-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      - POSTGRES_USER=scenario
+      - POSTGRES_PASSWORD=scenario
+      - POSTGRES_DB=scenario
+
+  scenarioplayer:
+    build: ./ScenarioPlayer
+    command: python manage.py runserver 0.0.0.0:5433
+    env_file:
+      - ./.env.player.dev
+    volumes:
+      - ./ScenarioPlayer/PlayerServer/:/root/ScenarioPlayer/PlayerServer/
+      - temp_scenario:/root/temp/
+    ports:
+      - 5433:5433
+
+volumes:
+  postgres_data:
+  temp_scenario:
